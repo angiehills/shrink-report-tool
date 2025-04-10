@@ -12,29 +12,58 @@ uploaded_file = st.file_uploader("📄 Choose a PDF file", type="pdf")
 
 if uploaded_file:
     doc = fitz.open(stream=uploaded_file.read(), filetype="pdf")
-    data_rows = []
-
+    lines = []
     for page in doc:
-        text = page.get_text()
-        lines = text.split("\n")
-        for line in lines:
-            if re.match(r'^\d{5,}\s+.+?\s{2,}.+?\s{2,}.*?\$\d+\.\d{2}\s+\d+\s+\$\d+\.\d{2}$', line):
-                parts = re.split(r'\s{2,}', line)
-                if len(parts) >= 5:
-                    product_info = parts[0].split()
-                    upc = product_info[0]
-                    product_name = " ".join(product_info[1:])
-                    department = parts[1]
-                    unit_price = parts[2].replace("$", "")
-                    quantity = parts[3]
-                    total = parts[4].replace("$", "")
-                    data_rows.append([upc, product_name, department, unit_price, quantity, total])
+        lines += page.get_text().split("\n")
 
-    if data_rows:
-        df = pd.DataFrame(data_rows, columns=["UPC", "Product Name", "Department", "Unit Price", "Quantity", "Total"])
-        output = io.BytesIO()
-        with pd.ExcelWriter(output, engine='openpyxl') as writer:
-            df.to_excel(writer, index=False)
+    lines = [line.strip() for line in lines if line.strip()]
+    records = []
+    record = {}
+    fields_captured = 0
+
+    for i, line in enumerate(lines):
+        if re.match(r'^\d{11,}$', line):
+            if record and fields_captured >= 7:
+                records.append(record)
+            record = {}
+            fields_captured = 0
+            record["UPC"] = line
+            fields_captured += 1
+        elif "AWG" in line or "NASH" in line:
+            record["Vendor"] = line
+            fields_captured += 1
+        elif re.match(r'^\d+(\.\d{2})$', line):
+            if "Price" not in record:
+                record["Price"] = line
+            else:
+                record["Retail"] = line
+            fields_captured += 1
+        elif re.match(r'^\d+$', line):
+            record["Units"] = line
+            fields_captured += 1
+        elif re.match(r'^\d{2}/\d{2}$', line):
+            record["Date"] = line
+            fields_captured += 1
+        elif re.match(r'^[A-Z]{3}$', line):
+            record["User"] = line
+            fields_captured += 1
+        elif "Out of Date" in line or "Spoilage" in line:
+            record["Reason"] = line
+            fields_captured += 1
+        elif line.lower() not in ["department", "total:"]:
+            if "Description" not in record:
+                record["Description"] = line
+                fields_captured += 1
+
+    if record and fields_captured >= 7:
+        records.append(record)
+
+    df = pd.DataFrame(records)
+    output = io.BytesIO()
+    with pd.ExcelWriter(output, engine='openpyxl') as writer:
+        df.to_excel(writer, index=False)
+
+    if not df.empty:
         st.success("✅ Data extracted successfully!")
         st.download_button(
             label="📥 Download Excel File",
