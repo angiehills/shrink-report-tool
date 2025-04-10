@@ -32,38 +32,51 @@ if uploaded_file:
             found = next((k for k in keywords if any(k in line.upper() for line in lines)), None)
             department = found if found else f"PAGE_{page_num}"
 
-        # Skip non-shrink pages
         if "End Reports" in report_line:
             continue
 
-        # Look for structured rows after the column headers
+        # Find header index and data block
         try:
-            header_idx = next(i for i, l in enumerate(lines) if l.lower().startswith("conf #")) + 1
+            header_idx = next(i for i, l in enumerate(lines) if l.lower().startswith("conf")) + 1
         except StopIteration:
-            header_idx = 0
+            continue
 
-        # Try to split each line into fields using flexible spacing
+        # Expected number of lines per record (assuming fixed layout)
+        expected_lines_per_record = 3  # Example based on visible samples
+        data_lines = lines[header_idx:]
+
+        # Chunk lines to form records
         data_rows = []
-        for line in lines[header_idx:]:
+        chunk = []
+        for line in data_lines:
             if line.lower().startswith("total"):
                 break
-            if len(line.split()) > 4:  # basic validation
-                row = re.split(r"\s{2,}|\t", line)
-                data_rows.append(row)
+            if line.lower().startswith("out of date"):
+                chunk.append(line)
+            elif re.match(r'^[0-9]{5,}$', line.replace(" ", "")) or len(chunk) >= expected_lines_per_record:
+                if chunk:
+                    data_rows.append(chunk)
+                chunk = [line]
+            else:
+                chunk.append(line)
+        if chunk:
+            data_rows.append(chunk)
 
         if not data_rows:
             continue
 
-        # Define expected column headers
+        # Pad or trim each chunk to match expected columns
+        max_columns = 14
+        clean_rows = [row + [""] * (max_columns - len(row)) if len(row) < max_columns else row[:max_columns] for row in data_rows]
+
+        # Define headers
         columns = [
             "Conf #", "Date", "User", "UPC", "Description", "Size", "Reason", "Vendor",
-            "Price Adj", "Weight", "Units/Scans", "Retail/Avg", "Total", "Reclaim Eligible", "Allow Credit"
+            "Price Adj", "Weight", "Units/Scans", "Retail/Avg", "Total"
         ]
 
-        df = pd.DataFrame(data_rows)
-        df.columns = columns[:df.shape[1]]
+        df = pd.DataFrame(clean_rows, columns=columns[:len(clean_rows[0])])
 
-        # Prepend metadata and structure sheet
         metadata = [
             ["Grocery Order Tracking"],
             ["Shrink"],
