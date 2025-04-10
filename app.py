@@ -2,6 +2,7 @@ import streamlit as st
 import fitz  # PyMuPDF
 import pandas as pd
 import re
+from collections import defaultdict
 from io import BytesIO
 
 st.title("📊 Shrink Report PDF to Excel Converter")
@@ -11,132 +12,95 @@ uploaded_file = st.file_uploader("📄 Choose a PDF file", type="pdf")
 
 if uploaded_file:
     doc = fitz.open(stream=uploaded_file.read(), filetype="pdf")
-    all_data = {}
+    parsed_departments = defaultdict(list)
 
-    # Define consistent column headers
+    # Extract blocks with coordinates to reconstruct lines
+    for page_num, page in enumerate(doc, 1):
+        blocks = page.get_text("blocks")
+        text_blocks = [(round(b[1], 1), b[4]) for b in blocks if b[4].strip()]
+        grouped_rows = defaultdict(list)
+        for y, text in text_blocks:
+            grouped_rows[y].append(text)
+
+        # Try to find department name
+        department = f"Page_{page_num}"
+        for _, texts in grouped_rows.items():
+            if any("Department" in t for t in texts):
+                for t in texts:
+                    if "Department" not in t:
+                        department = t.strip().upper()
+                        break
+
+        # Skip summary page for now
+        if any("Reason" in " ".join(v) and "Items" in " ".join(v) for v in grouped_rows.values()):
+            continue
+
+        # Add lines containing shrink data
+        for y in sorted(grouped_rows.keys()):
+            line = " ".join(grouped_rows[y])
+            if re.search(r"\d{5,}-\d{2}", line):  # Conf #
+                parsed_departments[department].append(line)
+
+    # Define final column order from the PDF
     columns = [
         "Conf #", "Date", "User", "UPC", "Description", "Size", "Reason", "Vendor",
-        "Price", "Weight", "Units/Scans", "Retail", "Total"
+        "Price", "Weight", "Units/Scans", "Retail/Avg", "Total"
     ]
 
-    # Loop through all pages except the summary (we’ll detect that dynamically)
-    for page_num, page in enumerate(doc, 1):
-        text = page.get_text("text")
-        lines = [line.strip() for line in text.split('\n') if line.strip()]
-
-        # Skip summary page (we'll handle it later)
-        if any(re.search(r"Department\s+Reason\s+Items\s+Total", line, re.IGNORECASE) for line in lines):
-            continue
-
-        # Extract metadata
-        store_line = next((line for line in lines if "Piggly" in line), "")
-        report_line = next((line for line in lines if "Report" in line), "")
-        page_line = next((line for line in lines if "Page #" in line or "Page:" in line), f"Page {page_num}")
-        timestamp_line = next((line for line in lines if "/" in line and ":" in line), "")
-        department_line = next((line for line in lines if "Department:" in line), None)
-
-        department = ""
-        if department_line:
-            department = department_line.split(":")[-1].strip().upper()
-        else:
-            keywords = ["DELI", "BAKERY", "PRODUCE", "MEAT", "GROCERY", "DAIRY", "HBC"]
-            found = next((k for k in keywords if any(k in line.upper() for line in lines)), None)
-            department = found if found else f"PAGE_{page_num}"
-
-        # Identify where the data starts
-        try:
-            header_index = next(i for i, line in enumerate(lines) if re.search(r"Conf #|Date|User", line, re.IGNORECASE))
-            data_lines = lines[header_index + 1:]
-        except StopIteration:
-            continue
-
-        # Stop parsing at “Total”
-        try:
-            total_index = next(i for i, line in enumerate(data_lines) if line.lower().startswith("total"))
-            data_lines = data_lines[:total_index]
-        except StopIteration:
-            pass
-
-        # Group lines into record blocks
-        record_blocks = []
-        for line in data_lines:
-            if re.match(r"\d{5,}-\d{2}", line) or re.match(r"\d{5,}$", line):
-                record_blocks.append([line])
-            elif record_blocks:
-                record_blocks[-1].append(line)
-
-        # Parse fields from blocks
+    structured_data = {}
+    for dept, lines in parsed_departments.items():
         parsed_rows = []
-        for block in record_blocks:
-            combined = " ".join(block)
-            fields = re.split(r"\s{2,}", combined)
-            parsed_rows.append((fields + [""] * len(columns))[:len(columns)])
+        for raw in lines:
+            parts = raw.replace("\n", " ").split()
+            if len(parts) < 14:
+                continue
+            try:
+                conf_idx = next(i for i, p in enumerate(parts) if re.match(r"\d{5,}-\d{2}", p))
+                conf = parts[conf_idx]
+                date = parts[conf_idx + 1]
+                user = parts[conf_idx + 2]
+                upc_idx = next(i for i, p in enumerate(parts) if re.match(r"\d{11,}", p))
+                upc = parts[upc_idx]
+                size = parts[upc_idx - 1]
+                description = " ".join(parts[conf_idx + 3:upc_idx - 1])
+                vendor = parts[upc_idx + 1] + " " + parts[upc_idx + 2]
+                units = parts[upc_idx + 3]
+                reason = parts[upc_idx + 4]
+                if not parts[upc_idx + 5].replace('.', '', 1).isdigit():
+                    reason += " " + parts[upc_idx + 5]
+                    price_idx = upc_idx + 6
+                else:
+                    price_idx = upc_idx + 5
+                price = parts[price_idx]
+                retail = parts[price_idx + 1]
+                total = parts[price_idx + 2] if len(parts) > price_idx + 2 else ""
+                weight = parts[price_idx + 3] if len(parts) > price_idx + 3 and not parts[price_idx + 3].replace('.', '', 1).isdigit() else ""
+
+                row = [
+                    conf, date, user, upc, description, size, reason, vendor,
+                    price, weight, units, retail, total
+                ]
+                parsed_rows.append((row + [""] * len(columns))[:len(columns)])
+            except Exception:
+                continue
 
         df = pd.DataFrame(parsed_rows, columns=columns)
+        structured_data[dept] = df
 
-        # Create metadata section
-        metadata = [
-            ["Grocery Order Tracking"],
-            ["Shrink"],
-            [f"Store: {store_line}"],
-            [f"Page: {page_line}"],
-            [f"Report: {report_line}"],
-            [f"Date Printed: {timestamp_line}"],
-            [f"Department: {department}"],
-            []
-        ]
-        meta_df = pd.DataFrame(metadata)
-        columns_row = pd.DataFrame([columns])
-        total_row = pd.DataFrame([["Total"] + ["" for _ in range(len(columns) - 1)]], columns=columns)
+    if structured_data:
+        pdf_name = uploaded_file.name.replace(".pdf", "").replace(".PDF", "")
+        excel_name = f"{pdf_name}_parsed.xlsx"
+        output = BytesIO()
+        with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
+            for sheet, df in structured_data.items():
+                df.to_excel(writer, sheet_name=sheet[:31], index=False)
 
-        full_df = pd.concat([meta_df, columns_row, df, total_row], ignore_index=True)
-        all_data[department] = full_df
-
-    # Dynamically detect and process the summary page
-    summary_page_index = None
-    for i, page in enumerate(doc):
-        page_text = page.get_text("text")
-        if re.search(r"Department\s+Reason\s+Items\s+Total", page_text, re.IGNORECASE):
-            summary_page_index = i
-            break
-
-    if summary_page_index is not None:
-        summary_lines = [line.strip() for line in doc[summary_page_index].get_text("text").split("\n") if line.strip()]
-        summary_data = []
-        capture = False
-        for line in summary_lines:
-            if re.search(r"Department\s+Reason\s+Items\s+Total", line):
-                capture = True
-                summary_data.append(["Department", "Reason", "Items", "Total Retail", "Total Cost"])
-            elif "Total:" in line:
-                total_match = re.findall(r"[\d,]+\.\d{2}", line)
-                if total_match:
-                    summary_data.append(["", "", "", total_match[0], ""])
-                break
-            elif capture:
-                parts = re.split(r"\s{2,}", line)
-                if len(parts) >= 4:
-                    summary_data.append(parts[:5])
-                else:
-                    summary_data.append(parts + [""] * (5 - len(parts)))
-
-        summary_meta = pd.DataFrame([["Shrink Report Summary"]])
-        summary_df = pd.DataFrame(summary_data)
-        final_summary_sheet = pd.concat([summary_meta, pd.DataFrame([[]]), summary_df], ignore_index=True)
-        all_data["Summary"] = final_summary_sheet
-
-    # Create Excel download
-    pdf_name = uploaded_file.name.replace(".pdf", "").replace(".PDF", "")
-    excel_name = f"{pdf_name}.xlsx"
-    output = BytesIO()
-    with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
-        for sheet_name, df in all_data.items():
-            df.to_excel(writer, sheet_name=sheet_name[:31], index=False, header=False)
-
-    st.success("✅ Conversion complete!")
-    st.download_button(
-        label="📥 Download Excel File",
-        data=output.getvalue(),
-        file_name=excel_name,
-        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-    )
+        st.success("✅ Conversion complete!")
+        st.download_button(
+            label="📥 Download Excel File",
+            data=output.getvalue(),
+            file_name=excel_name,
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        )
+    else:
+        st.warning("⚠️ No valid shrink data found in this PDF.")
