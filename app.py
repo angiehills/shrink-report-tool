@@ -20,37 +20,47 @@ if uploaded_file:
         # Extract metadata
         store_line = next((line for line in lines if "Piggly" in line), "")
         report_line = next((line for line in lines if "Report" in line), "")
-        page_line = next((line for line in lines if "Page #" in line), f"Page {page_num}")
+        page_line = next((line for line in lines if "Page #" in line or "Page:" in line), f"Page {page_num}")
         timestamp_line = next((line for line in lines if "/" in line and ":" in line), "")
-        department_line = next((line for line in lines if "Department:" in line), "Department: Unknown")
+        department_line = next((line for line in lines if "Department:" in line), f"Department: Page_{page_num}")
         department = department_line.split(":")[-1].strip().upper() or f"Page_{page_num}"
 
-        # Skip pages that don't look like real shrink entries
-        if "End Reports" in report_line or not any("AWG" in line for line in lines):
+        # Skip non-shrink pages
+        if "End Reports" in report_line:
             continue
 
-        # Find the index of the header row
+        # Try to find structured shrink data (Deli format)
         try:
             header_idx = next(i for i, l in enumerate(lines) if l.startswith("Conf #")) + 1
-        except:
-            header_idx = None
-
-        # Extract data rows
-        data_rows = []
-        if header_idx:
+            data_rows = []
             for line in lines[header_idx:]:
                 if line.lower().startswith("total"):
                     break
                 if len(line.strip()) > 10:
                     row = re.split(r"\s{2,}", line.strip())
                     data_rows.append(row)
+        except:
+            # Fallback: handle Description + UPC alternating lines
+            data_rows = []
+            content_start = next((i for i, l in enumerate(lines) if l.upper().startswith("DEPARTMENT:")), None)
+            if content_start is not None:
+                block_lines = lines[content_start + 1:]
+                i = 0
+                while i < len(block_lines) - 1:
+                    desc = block_lines[i].strip()
+                    upc = block_lines[i + 1].strip()
+                    if re.match(r"^\d{11,}$", upc) or re.match(r"^\d{5,}$", upc):
+                        data_rows.append([desc, upc])
+                        i += 2
+                    else:
+                        i += 1
 
         if not data_rows:
             continue
 
         df = pd.DataFrame(data_rows)
 
-        # Prepend metadata to top rows
+        # Prepend metadata
         metadata = [
             ["Grocery Order Tracking"],
             ["Shrink"],
@@ -63,7 +73,7 @@ if uploaded_file:
         ]
         meta_df = pd.DataFrame(metadata)
         full_df = pd.concat([meta_df, df], ignore_index=True)
-        all_data[department] = full_df
+        all_data[department or f"Page_{page_num}"] = full_df
 
     if all_data:
         pdf_name = uploaded_file.name.replace(".pdf", "").replace(".PDF", "")
