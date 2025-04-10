@@ -56,8 +56,10 @@ if uploaded_file:
                 "Conf #", "Date", "User", "UPC", "Description", "Size", "Reason", "Vendor",
                 "Price Adj", "Weight", "Units/Scans", "Retail/Avg", "Total", "Reclaim Eligible", "Allow Credit"
             ]
+            df = pd.DataFrame(data_rows)
+            df.columns = columns[:df.shape[1]]
         except:
-            # Fallback: handle Description + UPC alternating lines
+            # Fallback: handle Description + UPC + Reason alternating lines
             data_rows = []
             content_start = next((i for i, l in enumerate(lines) if l.upper().startswith("DEPARTMENT:")), None)
             if content_start is not None:
@@ -73,13 +75,13 @@ if uploaded_file:
                     else:
                         i += 1
             columns = ["Description", "UPC", "Reason"]
+            df = pd.DataFrame(data_rows)
+            df.columns = columns[:df.shape[1]]
 
-        if not data_rows:
+        if df.empty:
             continue
 
-        df = pd.DataFrame(data_rows, columns=columns[:len(data_rows[0])])
-
-        # Prepend metadata
+        # Prepend metadata and structure sheet
         metadata = [
             ["Grocery Order Tracking"],
             ["Shrink"],
@@ -91,7 +93,7 @@ if uploaded_file:
             [],
         ]
         meta_df = pd.DataFrame(metadata)
-        columns_row = pd.DataFrame([columns[:len(df.columns)]])
+        columns_row = pd.DataFrame([df.columns.tolist()])
         total_row = pd.DataFrame([["Total"] + ["" for _ in range(df.shape[1] - 1)]], columns=df.columns)
 
         full_df = pd.concat([meta_df, columns_row, df, total_row], ignore_index=True)
