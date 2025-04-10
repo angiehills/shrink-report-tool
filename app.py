@@ -5,10 +5,10 @@ import re
 import os
 from io import BytesIO
 
-st.title("📊 Shrink Report PDF to Excel Converter")
+st.title("\U0001F4CA Shrink Report PDF to Excel Converter")
 st.write("Upload a shrink report PDF and download a clean Excel spreadsheet.")
 
-uploaded_file = st.file_uploader("📄 Choose a PDF file", type="pdf")
+uploaded_file = st.file_uploader("\U0001F4C4 Choose a PDF file", type="pdf")
 
 if uploaded_file:
     doc = fitz.open(stream=uploaded_file.read(), filetype="pdf")
@@ -91,8 +91,10 @@ if uploaded_file:
             [],
         ]
         meta_df = pd.DataFrame(metadata)
+        columns_row = pd.DataFrame([columns[:len(df.columns)]])
         total_row = pd.DataFrame([["Total"] + ["" for _ in range(df.shape[1] - 1)]], columns=df.columns)
-        full_df = pd.concat([meta_df, pd.DataFrame([columns], columns=df.columns), df, total_row], ignore_index=True)
+
+        full_df = pd.concat([meta_df, columns_row, df, total_row], ignore_index=True)
         all_data[department or f"Page_{page_num}"] = full_df
 
     if all_data:
@@ -103,12 +105,12 @@ if uploaded_file:
             for sheet, df in all_data.items():
                 df.to_excel(writer, sheet_name=sheet[:31], index=False, header=False)
 
-        st.success("✅ Conversion complete!")
+        st.success("\u2705 Conversion complete!")
         st.download_button(
-            label="📥 Download Excel File",
+            label="\U0001F4E5 Download Excel File",
             data=output.getvalue(),
             file_name=excel_name,
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
         )
     else:
-        st.warning("⚠️ No valid shrink data found in this PDF. Please check the file format.")
+        st.warning("\u26A0\uFE0F No valid shrink data found in this PDF. Please check the file format.")
