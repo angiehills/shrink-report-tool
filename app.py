@@ -25,23 +25,28 @@ if uploaded_file:
         department_line = next((line for line in lines if "Department:" in line), "Department: Unknown")
         department = department_line.split(":")[-1].strip().upper() or f"Page_{page_num}"
 
+        # Skip pages that don't look like real shrink entries
+        if "End Reports" in report_line or not any("AWG" in line for line in lines):
+            continue
+
         # Find the index of the header row
         try:
-            header_idx = lines.index("Conf #\tDate\tUser\tUPC\tDescription\tSize\tReason\tVendor\tPrice Adj\tWeight\tUnits/Scans\tRetail/Avg Ret Scans\tTotal\tReclaim Eligible\tAllow Credit") + 1
+            header_idx = next(i for i, l in enumerate(lines) if l.startswith("Conf #")) + 1
         except:
-            try:
-                header_idx = next(i for i, l in enumerate(lines) if l.startswith("Conf #")) + 1
-            except:
-                header_idx = None
+            header_idx = None
 
         # Extract data rows
         data_rows = []
-        for line in lines[header_idx:]:
-            if line.lower().startswith("total"):
-                break
-            if len(line.strip()) > 10:
-                row = re.split(r"\s{2,}", line.strip())
-                data_rows.append(row)
+        if header_idx:
+            for line in lines[header_idx:]:
+                if line.lower().startswith("total"):
+                    break
+                if len(line.strip()) > 10:
+                    row = re.split(r"\s{2,}", line.strip())
+                    data_rows.append(row)
+
+        if not data_rows:
+            continue
 
         df = pd.DataFrame(data_rows)
 
@@ -60,18 +65,20 @@ if uploaded_file:
         full_df = pd.concat([meta_df, df], ignore_index=True)
         all_data[department] = full_df
 
-    # Output Excel with original name
-    pdf_name = uploaded_file.name.replace(".pdf", "").replace(".PDF", "")
-    excel_name = f"{pdf_name}.xlsx"
-    output = BytesIO()
-    with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
-        for sheet, df in all_data.items():
-            df.to_excel(writer, sheet_name=sheet[:31], index=False, header=False)
-    
-    st.success("✅ Conversion complete!")
-    st.download_button(
-        label="📥 Download Excel File",
-        data=output.getvalue(),
-        file_name=excel_name,
-        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-    )
+    if all_data:
+        pdf_name = uploaded_file.name.replace(".pdf", "").replace(".PDF", "")
+        excel_name = f"{pdf_name}.xlsx"
+        output = BytesIO()
+        with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
+            for sheet, df in all_data.items():
+                df.to_excel(writer, sheet_name=sheet[:31], index=False, header=False)
+
+        st.success("✅ Conversion complete!")
+        st.download_button(
+            label="📥 Download Excel File",
+            data=output.getvalue(),
+            file_name=excel_name,
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        )
+    else:
+        st.warning("⚠️ No valid shrink data found in this PDF. Please check the file format.")
