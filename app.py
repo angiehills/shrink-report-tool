@@ -15,9 +15,10 @@ if uploaded_file:
     all_data = {}
 
     for page_num, page in enumerate(doc, 1):
-        lines = [line.strip() for line in page.get_text().split('\n') if line.strip()]
+        text = page.get_text("text")
+        lines = [line.strip() for line in text.split('\n') if line.strip()]
 
-        # Extract metadata
+        # Metadata extraction
         store_line = next((line for line in lines if "Piggly" in line), "")
         report_line = next((line for line in lines if "Report" in line), "")
         page_line = next((line for line in lines if "Page #" in line or "Page:" in line), f"Page {page_num}")
@@ -33,7 +34,6 @@ if uploaded_file:
             department = found if found else f"PAGE_{page_num}"
 
         if "End Reports" in report_line:
-            # Still include as its own sheet
             summary_df = pd.DataFrame([
                 ["Grocery Order Tracking"],
                 ["Shrink"],
@@ -48,45 +48,39 @@ if uploaded_file:
             all_data[department or f"Page_{page_num}"] = summary_df
             continue
 
-        # Locate header and extract rows
-        try:
-            header_idx = next(i for i, l in enumerate(lines) if l.lower().startswith("conf"))
-        except StopIteration:
-            header_idx = None
+        # Attempt to identify start of data
+        header_keywords = ["Conf", "Date", "User"]
+        header_idx = next((i for i, line in enumerate(lines) if all(k in line for k in header_keywords)), None)
 
         data_lines = lines[header_idx + 1:] if header_idx is not None else []
 
-        # Stop at "Total" or empty
-        trimmed_lines = []
+        record_blocks = []
+        block = []
         for line in data_lines:
             if line.lower().startswith("total"):
                 break
-            trimmed_lines.append(line)
-
-        # Chunk into records by every 3 lines, but be flexible
-        record_lines = []
-        buffer = []
-        for line in trimmed_lines:
-            buffer.append(line)
-            if len(buffer) == 3:
-                record_lines.append(buffer)
-                buffer = []
-        if buffer:  # catch incomplete last record
-            record_lines.append(buffer)
+            if re.match(r"\d{5,}-\d{2}", line) or re.match(r"\d{5,}$", line):
+                if block:
+                    record_blocks.append(block)
+                block = [line]
+            else:
+                block.append(line)
+        if block:
+            record_blocks.append(block)
 
         columns = [
             "Conf #", "Date", "User", "UPC", "Description", "Size", "Reason", "Vendor",
             "Price Adj", "Weight", "Units/Scans", "Retail/Avg", "Total"
         ]
 
-        clean_rows = []
-        for record in record_lines:
-            full_text = " ".join(record)
-            fields = re.split(r"\s{2,}|(?<=\d) (?=\d{5,})", full_text.strip())  # attempt to break intelligently
+        parsed_rows = []
+        for block in record_blocks:
+            combined = " ".join(block)
+            fields = re.split(r"\s{2,}|(?<=\d) (?=\d{5,})", combined.strip())
             row = (fields + [""] * len(columns))[:len(columns)]
-            clean_rows.append(row)
+            parsed_rows.append(row)
 
-        df = pd.DataFrame(clean_rows, columns=columns)
+        df = pd.DataFrame(parsed_rows, columns=columns)
 
         metadata = [
             ["Grocery Order Tracking"],
