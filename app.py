@@ -29,8 +29,8 @@ if uploaded_file:
             department = department_line.split(":")[-1].strip().upper()
         else:
             keywords = ["DELI", "BAKERY", "PRODUCE", "MEAT"]
-            found = next((k for k in keywords if k in lines), None)
-            department = found if found else f"PAGE_{page_num}"
+            found = next((k for k in keywords if any(k in line.upper() for line in lines)), None)
+            department = found if found else f"Page_{page_num}"
 
         # Skip non-shrink pages
         if "End Reports" in report_line:
@@ -55,19 +55,17 @@ if uploaded_file:
         except:
             # Fallback: handle Description + UPC + Reason alternating lines
             data_rows = []
-            content_start = next((i for i, l in enumerate(lines) if l.upper().startswith("DEPARTMENT:")), None)
-            if content_start is not None:
-                block_lines = lines[content_start + 1:]
-                i = 0
-                while i < len(block_lines) - 2:
-                    desc = block_lines[i].strip()
-                    upc = block_lines[i + 1].strip()
-                    reason = block_lines[i + 2].strip()
-                    if re.match(r"^\d{5,}$", upc):
-                        data_rows.append(["", "", "", upc, desc, "", reason, "", "", "", "", "", "", "", ""])
-                        i += 3
-                    else:
-                        i += 1
+            block_lines = lines[7:]  # Skip metadata section
+            i = 0
+            while i < len(block_lines) - 2:
+                desc = block_lines[i].strip()
+                upc = block_lines[i + 1].strip()
+                reason = block_lines[i + 2].strip()
+                if re.match(r"^\d{5,}$", upc):
+                    data_rows.append(["", "", "", upc, desc, "", reason, "", "", "", "", "", "", "", ""])
+                    i += 3
+                else:
+                    i += 1
             columns = [
                 "Conf #", "Date", "User", "UPC", "Description", "Size", "Reason", "Vendor",
                 "Price Adj", "Weight", "Units/Scans", "Retail/Avg", "Total", "Reclaim Eligible", "Allow Credit"
