@@ -12,98 +12,73 @@ uploaded_file = st.file_uploader("📄 Choose a PDF file", type="pdf")
 
 if uploaded_file:
     doc = fitz.open(stream=uploaded_file.read(), filetype="pdf")
-    pages_data = {}
-    summary_rows = []
 
-    columns_expected = [
+    # Define headers and refined column mapping
+    columns_final = [
         "Conf #", "Date", "User", "UPC", "Description", "Size", "Reason", "Vendor",
         "Price", "Weight", "Units/Scans", "Retail/Avg", "Total"
     ]
 
-    known_depts = ["BAKERY", "DAIRY", "DELI", "GROCERY", "HBC", "MEAT FRESH", "PRODUCE"]
+    def final_map_x_to_column(x):
+        if x < 50: return "Conf #"
+        elif x < 80: return "Date"
+        elif x < 120: return "User"
+        elif x < 220: return "UPC"
+        elif x < 400: return "Description"
+        elif x < 440: return "Size"
+        elif x < 500: return "Reason"
+        elif x < 560: return "Vendor"
+        elif x < 600: return "Price"
+        elif x < 640: return "Weight"
+        elif x < 680: return "Units/Scans"
+        elif x < 720: return "Retail/Avg"
+        else: return "Total"
 
-    for page_num, page in enumerate(doc, 1):
-        blocks = page.get_text("blocks")
+    pages_data = {}
+    pages = list(doc.pages())
+
+    for page in pages:
+        blocks = page.get_text("dict")["blocks"]
+        row_data = defaultdict(dict)
+
         store = report = date = dept = page_label = ""
-        lines = [b[4].strip() for b in blocks if b[4].strip()]
 
-        # Extract metadata
-        for line in lines:
-            if "Piggly" in line:
-                store = line
-            elif "Report" in line:
-                report = line
-            elif "Page" in line:
-                page_label = line
-            elif "/" in line and ":" in line:
-                date = line
-
-        dept_line = next((b[4] for b in blocks if "Department" in b[4]), "")
-        dept = dept_line.split(":")[-1].strip() if dept_line else f"Page_{page_num}"
-
-        # Group by y, sort by x to preserve structure
-        rows_by_y = defaultdict(list)
         for b in blocks:
-            y = round(b[1], 1)
-            rows_by_y[y].append((b[0], b[4].strip()))
+            for l in b.get("lines", []):
+                y = round(l["bbox"][1], 1)
+                for s in l["spans"]:
+                    x = s["bbox"][0]
+                    text = s["text"].strip()
+                    if not text:
+                        continue
+                    col = final_map_x_to_column(x)
+                    row_data[y][col] = text
 
-        structured_rows = []
-        for y in sorted(rows_by_y):
-            row = sorted(rows_by_y[y], key=lambda x: x[0])
-            text_line = [r[1] for r in row if r[1]]
-            structured_rows.append(" ".join(text_line))
+                    # Pull metadata on the fly
+                    if "Piggly" in text:
+                        store = text
+                    elif "Report" in text:
+                        report = text
+                    elif "/" in text and ":" in text:
+                        date = text
+                    elif "Department" in text:
+                        dept = text.split(":")[-1].strip()
+                    elif "Page" in text:
+                        page_label = text
 
-        # Detect and parse summary page
-        if any("Department" in line and "Items" in line for line in structured_rows):
-            for line in structured_rows:
-                match = re.match(r"(\d+)\s+(.+?)\s+([\d.]+)\s+([A-Z ]+)", line)
-                if match:
-                    items, reason, retail, department = match.groups()
-                    summary_rows.append([department.strip(), reason.strip(), int(items), float(retail)])
-                elif line.lower().startswith("total"):
-                    total_val = re.findall(r"[\d,.]+", line)
-                    if total_val:
-                        summary_rows.append(["", "Total", "", float(total_val[0])])
-            continue
+        # Fallbacks
+        if not dept:
+            dept = f"Page_{page.number+1}"
 
-        # Parse data rows using fixed field markers
-        data_rows = []
-        for line in structured_rows:
-            parts = line.split()
-            if len(parts) >= 13 and any("-" in p for p in parts):
-                data_rows.append(parts)
+        # Extract only clean rows with a valid Conf #
+        clean_structured_rows = []
+        for y in sorted(row_data.keys()):
+            row = row_data[y]
+            if re.match(r"\d{5,}-\d{2}", row.get("Conf #", "")):
+                clean_structured_rows.append([row.get(c, "") for c in columns_final])
 
-        df_rows = []
-        for parts in data_rows:
-            try:
-                conf_idx = next(i for i, p in enumerate(parts) if re.match(r"\d{5,}-\d{2}", p))
-                conf = parts[conf_idx]
-                date_field = parts[conf_idx + 1]
-                user = parts[conf_idx + 2]
-                upc_idx = next(i for i, p in enumerate(parts) if re.match(r"\d{11,}", p))
-                upc = parts[upc_idx]
-                size = parts[upc_idx - 1]
-                description = " ".join(parts[conf_idx + 3:upc_idx - 1])
-                vendor = parts[upc_idx + 1] + " " + parts[upc_idx + 2]
-                units = parts[upc_idx + 3]
-                reason = parts[upc_idx + 4]
-                if not parts[upc_idx + 5].replace(".", "", 1).isdigit():
-                    reason += " " + parts[upc_idx + 5]
-                    price_idx = upc_idx + 6
-                else:
-                    price_idx = upc_idx + 5
-                price = parts[price_idx]
-                retail = parts[price_idx + 1]
-                total = parts[price_idx + 2] if len(parts) > price_idx + 2 else ""
-                weight = parts[price_idx + 3] if len(parts) > price_idx + 3 and not parts[price_idx + 3].replace('.', '', 1).isdigit() else ""
-                df_rows.append([
-                    conf, date_field, user, upc, description, size, reason, vendor,
-                    price, weight, units, retail, total
-                ])
-            except:
-                continue
-
-        df = pd.DataFrame(df_rows, columns=columns_expected)
+        # Build full DataFrame with metadata + headers + data
+        df = pd.DataFrame(clean_structured_rows, columns=columns_final)
         meta = pd.DataFrame([
             ["Grocery Order Tracking"],
             ["Shrink"],
@@ -114,24 +89,20 @@ if uploaded_file:
             [f"Department: {dept}"],
             []
         ])
-        header = pd.DataFrame([columns_expected])
-        total_row = pd.DataFrame([["Total"] + [""] * (len(columns_expected) - 1)], columns=columns_expected)
-        full_page = pd.concat([meta, header, df, total_row], ignore_index=True)
-        pages_data[dept] = full_page
+        header = pd.DataFrame([columns_final])
+        total_row = pd.DataFrame([["Total"] + [""] * (len(columns_final) - 1)], columns=columns_final)
 
-    # Create clean summary DataFrame
-    summary_df = pd.DataFrame(summary_rows, columns=["Department", "Reason", "Items", "Total Retail"])
+        full_tab = pd.concat([meta, header, df, total_row], ignore_index=True)
+        pages_data[dept] = full_tab
 
     # Export to Excel
     pdf_name = uploaded_file.name.replace(".pdf", "").replace(".PDF", "")
     excel_name = f"{pdf_name}_converted.xlsx"
     output = BytesIO()
+
     with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
-        for name, df in pages_data.items():
-            df.to_excel(writer, sheet_name=name[:31], index=False, header=False)
-        if not summary_df.empty:
-            pd.DataFrame([["Shrink Report Summary"], []]).to_excel(writer, sheet_name="Summary", index=False, header=False)
-            summary_df.to_excel(writer, sheet_name="Summary", startrow=2, index=False)
+        for dept, df in pages_data.items():
+            df.to_excel(writer, sheet_name=dept[:31], index=False, header=False)
 
     st.success("✅ Conversion complete!")
     st.download_button(
