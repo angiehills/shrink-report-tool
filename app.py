@@ -22,8 +22,21 @@ if uploaded_file:
         report_line = next((line for line in lines if "Report" in line), "")
         page_line = next((line for line in lines if "Page #" in line or "Page:" in line), f"Page {page_num}")
         timestamp_line = next((line for line in lines if "/" in line and ":" in line), "")
-        department_line = next((line for line in lines if "Department:" in line), f"Department: Page_{page_num}")
-        department = department_line.split(":")[-1].strip().upper() or f"Page_{page_num}"
+        department_line = next((line for line in lines if "Department:" in line), None)
+
+        department = ""
+        if department_line:
+            department = department_line.split(":")[-1].strip().upper()
+        elif "DELI" in lines:
+            department = "DELI"
+        elif "BAKERY" in lines:
+            department = "BAKERY"
+        elif "PRODUCE" in lines:
+            department = "PRODUCE"
+        elif "MEAT" in lines:
+            department = "MEAT"
+        else:
+            department = f"PAGE_{page_num}"
 
         # Skip non-shrink pages
         if "End Reports" in report_line:
@@ -39,6 +52,10 @@ if uploaded_file:
                 if len(line.strip()) > 10:
                     row = re.split(r"\s{2,}", line.strip())
                     data_rows.append(row)
+            columns = [
+                "Conf #", "Date", "User", "UPC", "Description", "Size", "Reason", "Vendor",
+                "Price Adj", "Weight", "Units/Scans", "Retail/Avg", "Total", "Reclaim Eligible", "Allow Credit"
+            ]
         except:
             # Fallback: handle Description + UPC alternating lines
             data_rows = []
@@ -46,19 +63,21 @@ if uploaded_file:
             if content_start is not None:
                 block_lines = lines[content_start + 1:]
                 i = 0
-                while i < len(block_lines) - 1:
+                while i < len(block_lines) - 2:
                     desc = block_lines[i].strip()
                     upc = block_lines[i + 1].strip()
+                    reason = block_lines[i + 2].strip()
                     if re.match(r"^\d{11,}$", upc) or re.match(r"^\d{5,}$", upc):
-                        data_rows.append([desc, upc])
-                        i += 2
+                        data_rows.append([desc, upc, reason])
+                        i += 3
                     else:
                         i += 1
+            columns = ["Description", "UPC", "Reason"]
 
         if not data_rows:
             continue
 
-        df = pd.DataFrame(data_rows)
+        df = pd.DataFrame(data_rows, columns=columns[:len(data_rows[0])])
 
         # Prepend metadata
         metadata = [
@@ -72,7 +91,8 @@ if uploaded_file:
             [],
         ]
         meta_df = pd.DataFrame(metadata)
-        full_df = pd.concat([meta_df, df], ignore_index=True)
+        total_row = pd.DataFrame([["Total"] + ["" for _ in range(df.shape[1] - 1)]], columns=df.columns)
+        full_df = pd.concat([meta_df, pd.DataFrame([columns], columns=df.columns), df, total_row], ignore_index=True)
         all_data[department or f"Page_{page_num}"] = full_df
 
     if all_data:
