@@ -28,54 +28,50 @@ if uploaded_file:
         if department_line:
             department = department_line.split(":")[-1].strip().upper()
         else:
-            keywords = ["DELI", "BAKERY", "PRODUCE", "MEAT"]
+            keywords = ["DELI", "BAKERY", "PRODUCE", "MEAT", "GROCERY"]
             found = next((k for k in keywords if any(k in line.upper() for line in lines)), None)
             department = found if found else f"PAGE_{page_num}"
 
         if "End Reports" in report_line:
             continue
 
-        # Find header index and data block
         try:
             header_idx = next(i for i, l in enumerate(lines) if l.lower().startswith("conf")) + 1
         except StopIteration:
             continue
 
-        # Expected number of lines per record (assuming fixed layout)
-        expected_lines_per_record = 3  # Example based on visible samples
         data_lines = lines[header_idx:]
-
-        # Chunk lines to form records
-        data_rows = []
-        chunk = []
+        record_lines = []
+        temp_record = []
         for line in data_lines:
             if line.lower().startswith("total"):
                 break
-            if line.lower().startswith("out of date"):
-                chunk.append(line)
-            elif re.match(r'^[0-9]{5,}$', line.replace(" ", "")) or len(chunk) >= expected_lines_per_record:
-                if chunk:
-                    data_rows.append(chunk)
-                chunk = [line]
-            else:
-                chunk.append(line)
-        if chunk:
-            data_rows.append(chunk)
+            temp_record.append(line)
+            if len(temp_record) == 3:  # Assuming each record spans 3 lines
+                record_lines.append(temp_record)
+                temp_record = []
 
-        if not data_rows:
+        if not record_lines:
             continue
 
-        # Pad or trim each chunk to match expected columns
-        max_columns = 14
-        clean_rows = [row + [""] * (max_columns - len(row)) if len(row) < max_columns else row[:max_columns] for row in data_rows]
-
-        # Define headers
+        # Fill or trim to ensure consistent column length
+        max_columns = 13
         columns = [
             "Conf #", "Date", "User", "UPC", "Description", "Size", "Reason", "Vendor",
             "Price Adj", "Weight", "Units/Scans", "Retail/Avg", "Total"
         ]
 
-        df = pd.DataFrame(clean_rows, columns=columns[:len(clean_rows[0])])
+        clean_rows = []
+        for record in record_lines:
+            row = []
+            for item in record:
+                parts = item.split()
+                row.extend(parts)
+            # Trim or pad
+            row = (row + [""] * max_columns)[:max_columns]
+            clean_rows.append(row)
+
+        df = pd.DataFrame(clean_rows, columns=columns)
 
         metadata = [
             ["Grocery Order Tracking"],
@@ -88,8 +84,8 @@ if uploaded_file:
             []
         ]
         meta_df = pd.DataFrame(metadata)
-        columns_row = pd.DataFrame([df.columns.tolist()])
-        total_row = pd.DataFrame([["Total"] + ["" for _ in range(df.shape[1] - 1)]], columns=df.columns)
+        columns_row = pd.DataFrame([columns])
+        total_row = pd.DataFrame([["Total"] + ["" for _ in range(len(columns) - 1)]], columns=columns)
 
         full_df = pd.concat([meta_df, columns_row, df, total_row], ignore_index=True)
         all_data[department or f"Page_{page_num}"] = full_df
