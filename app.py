@@ -27,16 +27,10 @@ if uploaded_file:
         department = ""
         if department_line:
             department = department_line.split(":")[-1].strip().upper()
-        elif "DELI" in lines:
-            department = "DELI"
-        elif "BAKERY" in lines:
-            department = "BAKERY"
-        elif "PRODUCE" in lines:
-            department = "PRODUCE"
-        elif "MEAT" in lines:
-            department = "MEAT"
         else:
-            department = f"PAGE_{page_num}"
+            keywords = ["DELI", "BAKERY", "PRODUCE", "MEAT"]
+            found = next((k for k in keywords if k in lines), None)
+            department = found if found else f"PAGE_{page_num}"
 
         # Skip non-shrink pages
         if "End Reports" in report_line:
@@ -49,8 +43,8 @@ if uploaded_file:
             for line in lines[header_idx:]:
                 if line.lower().startswith("total"):
                     break
-                if len(line.strip()) > 10:
-                    row = re.split(r"\s{2,}", line.strip())
+                row = re.split(r"\s{2,}", line.strip())
+                if len(row) >= 3:
                     data_rows.append(row)
             columns = [
                 "Conf #", "Date", "User", "UPC", "Description", "Size", "Reason", "Vendor",
@@ -69,14 +63,16 @@ if uploaded_file:
                     desc = block_lines[i].strip()
                     upc = block_lines[i + 1].strip()
                     reason = block_lines[i + 2].strip()
-                    if re.match(r"^\d{11,}$", upc) or re.match(r"^\d{5,}$", upc):
-                        data_rows.append([desc, upc, reason])
+                    if re.match(r"^\d{5,}$", upc):
+                        data_rows.append(["", "", "", upc, desc, "", reason, "", "", "", "", "", "", "", ""])
                         i += 3
                     else:
                         i += 1
-            columns = ["Description", "UPC", "Reason"]
-            df = pd.DataFrame(data_rows)
-            df.columns = columns[:df.shape[1]]
+            columns = [
+                "Conf #", "Date", "User", "UPC", "Description", "Size", "Reason", "Vendor",
+                "Price Adj", "Weight", "Units/Scans", "Retail/Avg", "Total", "Reclaim Eligible", "Allow Credit"
+            ]
+            df = pd.DataFrame(data_rows, columns=columns[:15])
 
         if df.empty:
             continue
@@ -90,10 +86,10 @@ if uploaded_file:
             [f"Report: {report_line}"],
             [f"Date Printed: {timestamp_line}"],
             [f"Department: {department}"],
-            [],
+            []
         ]
         meta_df = pd.DataFrame(metadata)
-        columns_row = pd.DataFrame([df.columns.tolist()])
+        columns_row = pd.DataFrame([columns[:df.shape[1]]])
         total_row = pd.DataFrame([["Total"] + ["" for _ in range(df.shape[1] - 1)]], columns=df.columns)
 
         full_df = pd.concat([meta_df, columns_row, df, total_row], ignore_index=True)
