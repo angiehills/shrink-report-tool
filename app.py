@@ -36,55 +36,32 @@ if uploaded_file:
         if "End Reports" in report_line:
             continue
 
-        # Try to find structured shrink data (Deli format)
+        # Look for structured rows after the column headers
         try:
-            header_idx = next(i for i, l in enumerate(lines) if l.startswith("Conf #")) + 1
-            data_rows = []
-            for line in lines[header_idx:]:
-                if line.lower().startswith("total"):
-                    break
-                row = re.split(r"\s{2,}", line.strip())
-                if len(row) >= 3:
-                    data_rows.append(row)
-            columns = [
-                "Conf #", "Date", "User", "UPC", "Description", "Size", "Reason", "Vendor",
-                "Price Adj", "Weight", "Units/Scans", "Retail/Avg", "Total", "Reclaim Eligible", "Allow Credit"
-            ]
-            df = pd.DataFrame(data_rows)
-            df.columns = columns[:df.shape[1]]
-        except:
-            # Enhanced fallback: match Description, UPC, and optional Reason in any order
-            data_rows = []
-            block_lines = lines[7:]  # Skip metadata section
-            i = 0
-            while i < len(block_lines) - 1:
-                desc = block_lines[i].strip()
-                upc_or_reason = block_lines[i + 1].strip()
-                third_line = block_lines[i + 2].strip() if i + 2 < len(block_lines) else ""
+            header_idx = next(i for i, l in enumerate(lines) if l.lower().startswith("conf #")) + 1
+        except StopIteration:
+            header_idx = 0
 
-                # Try to detect UPC and Reason regardless of order
-                if re.match(r"^\d{5,}$", upc_or_reason):
-                    upc = upc_or_reason
-                    reason = third_line if third_line.lower() in ["out of date", "damaged", "spoiled"] else ""
-                    i += 3 if reason else 2
-                elif re.match(r"^\d{5,}$", third_line):
-                    upc = third_line
-                    reason = upc_or_reason if upc_or_reason.lower() in ["out of date", "damaged", "spoiled"] else ""
-                    i += 3 if reason else 2
-                else:
-                    i += 1
-                    continue
+        # Try to split each line into fields using flexible spacing
+        data_rows = []
+        for line in lines[header_idx:]:
+            if line.lower().startswith("total"):
+                break
+            if len(line.split()) > 4:  # basic validation
+                row = re.split(r"\s{2,}|\t", line)
+                data_rows.append(row)
 
-                data_rows.append(["", "", "", upc, desc, "", reason, "", "", "", "", "", "", "", ""])
-
-            columns = [
-                "Conf #", "Date", "User", "UPC", "Description", "Size", "Reason", "Vendor",
-                "Price Adj", "Weight", "Units/Scans", "Retail/Avg", "Total", "Reclaim Eligible", "Allow Credit"
-            ]
-            df = pd.DataFrame(data_rows, columns=columns[:15])
-
-        if df.empty:
+        if not data_rows:
             continue
+
+        # Define expected column headers
+        columns = [
+            "Conf #", "Date", "User", "UPC", "Description", "Size", "Reason", "Vendor",
+            "Price Adj", "Weight", "Units/Scans", "Retail/Avg", "Total", "Reclaim Eligible", "Allow Credit"
+        ]
+
+        df = pd.DataFrame(data_rows)
+        df.columns = columns[:df.shape[1]]
 
         # Prepend metadata and structure sheet
         metadata = [
@@ -98,7 +75,7 @@ if uploaded_file:
             []
         ]
         meta_df = pd.DataFrame(metadata)
-        columns_row = pd.DataFrame([columns[:df.shape[1]]])
+        columns_row = pd.DataFrame([df.columns.tolist()])
         total_row = pd.DataFrame([["Total"] + ["" for _ in range(df.shape[1] - 1)]], columns=df.columns)
 
         full_df = pd.concat([meta_df, columns_row, df, total_row], ignore_index=True)
