@@ -53,20 +53,29 @@ if uploaded_file:
             df = pd.DataFrame(data_rows)
             df.columns = columns[:df.shape[1]]
         except:
-            # Improved fallback: alternating lines Description → UPC → Reason
+            # Enhanced fallback: match Description, UPC, and optional Reason in any order
             data_rows = []
-            keywords = ["Out of Date", "Damaged", "Spoiled"]
             block_lines = lines[7:]  # Skip metadata section
             i = 0
-            while i < len(block_lines) - 2:
+            while i < len(block_lines) - 1:
                 desc = block_lines[i].strip()
-                upc = block_lines[i + 1].strip()
-                reason = block_lines[i + 2].strip()
-                if re.match(r"^\d{5,}$", upc) and any(k.lower() in reason.lower() for k in keywords):
-                    data_rows.append(["", "", "", upc, desc, "", reason, "", "", "", "", "", "", "", ""])
-                    i += 3
+                upc_or_reason = block_lines[i + 1].strip()
+                third_line = block_lines[i + 2].strip() if i + 2 < len(block_lines) else ""
+
+                # Try to detect UPC and Reason regardless of order
+                if re.match(r"^\d{5,}$", upc_or_reason):
+                    upc = upc_or_reason
+                    reason = third_line if third_line.lower() in ["out of date", "damaged", "spoiled"] else ""
+                    i += 3 if reason else 2
+                elif re.match(r"^\d{5,}$", third_line):
+                    upc = third_line
+                    reason = upc_or_reason if upc_or_reason.lower() in ["out of date", "damaged", "spoiled"] else ""
+                    i += 3 if reason else 2
                 else:
                     i += 1
+                    continue
+
+                data_rows.append(["", "", "", upc, desc, "", reason, "", "", "", "", "", "", "", ""])
 
             columns = [
                 "Conf #", "Date", "User", "UPC", "Description", "Size", "Reason", "Vendor",
