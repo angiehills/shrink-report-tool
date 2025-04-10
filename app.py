@@ -33,29 +33,47 @@ if uploaded_file:
             department = found if found else f"PAGE_{page_num}"
 
         if "End Reports" in report_line:
+            # Still include as its own sheet
+            summary_df = pd.DataFrame([
+                ["Grocery Order Tracking"],
+                ["Shrink"],
+                [f"Store: {store_line}"],
+                [f"Page: {page_line}"],
+                [f"Report: {report_line}"],
+                [f"Date Printed: {timestamp_line}"],
+                [f"Department: {department}"],
+                [],
+                ["Summary or No Shrink Data Found"]
+            ])
+            all_data[department or f"Page_{page_num}"] = summary_df
             continue
 
+        # Locate header and extract rows
         try:
-            header_idx = next(i for i, l in enumerate(lines) if l.lower().startswith("conf")) + 1
+            header_idx = next(i for i, l in enumerate(lines) if l.lower().startswith("conf"))
         except StopIteration:
-            continue
+            header_idx = None
 
-        data_lines = lines[header_idx:]
-        record_lines = []
-        temp_record = []
+        data_lines = lines[header_idx + 1:] if header_idx is not None else []
+
+        # Stop at "Total" or empty
+        trimmed_lines = []
         for line in data_lines:
             if line.lower().startswith("total"):
                 break
-            temp_record.append(line)
-            if len(temp_record) == 3:  # Assuming each record spans 3 lines
-                record_lines.append(temp_record)
-                temp_record = []
+            trimmed_lines.append(line)
 
-        if not record_lines:
-            continue
+        # Chunk into records by every 3 lines, but be flexible
+        record_lines = []
+        buffer = []
+        for line in trimmed_lines:
+            buffer.append(line)
+            if len(buffer) == 3:
+                record_lines.append(buffer)
+                buffer = []
+        if buffer:  # catch incomplete last record
+            record_lines.append(buffer)
 
-        # Fill or trim to ensure consistent column length
-        max_columns = 13
         columns = [
             "Conf #", "Date", "User", "UPC", "Description", "Size", "Reason", "Vendor",
             "Price Adj", "Weight", "Units/Scans", "Retail/Avg", "Total"
@@ -63,12 +81,9 @@ if uploaded_file:
 
         clean_rows = []
         for record in record_lines:
-            row = []
-            for item in record:
-                parts = item.split()
-                row.extend(parts)
-            # Trim or pad
-            row = (row + [""] * max_columns)[:max_columns]
+            full_text = " ".join(record)
+            fields = re.split(r"\s{2,}|(?<=\d) (?=\d{5,})", full_text.strip())  # attempt to break intelligently
+            row = (fields + [""] * len(columns))[:len(columns)]
             clean_rows.append(row)
 
         df = pd.DataFrame(clean_rows, columns=columns)
